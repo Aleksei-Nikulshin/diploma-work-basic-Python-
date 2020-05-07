@@ -21,7 +21,7 @@ def get_api_data(method, params):
         else:
             error = response['error']['error_code']
             if error == ERROR_TOO_MANY_REQUESTS:
-                time.sleep(3)
+                time.sleep(0.4)
                 continue
             else:
                 return response
@@ -81,6 +81,28 @@ def write_json_data(filename, text):
     with open(filename, mode='w', encoding='utf-8') as file:
         file.write(text)
 
+def execute(chunk_friends):
+    settings = read_json_file(CONFIG_PATH)
+    code = 'var friends_groups = [];' \
+           f'var friends = {chunk_friends};' \
+           'var i = 0;' \
+           'while (i < friends.length) {' \
+           '  friends_groups.push(API.groups.get({"user_id": friends[i], "extended": 0}));' \
+           '  i = i + 1;' \
+           '}' \
+           'return friends_groups;'
+    resp = requests.get('https://api.vk.com/method/execute', params={
+        'access_token': settings['access_token'],
+        'v': 5.103,
+        'code': code,
+    })
+    a = resp.json()
+    b = [x['items'] for x in a['response']]
+    friend_groups_overall = set()
+    for d in b:
+        friend_groups_overall = friend_groups_overall.union(d)
+    return friend_groups_overall
+
 
 def main():
 
@@ -98,28 +120,35 @@ def main():
     except:
         user_id = users_search(user)
 
-
+    # получаем список друзей и групп пользователя
     friends = get_user_friends(user_id)
     groups = get_groups(user_id, params)
+    my_groups_id = [gr['id'] for gr in groups]
 
-    # составляем список из словарей, каждый из которых - данные о друге
-    my_groups = [(gr['id'], gr['name']) for gr in groups]
+    # готовим данные для работы с функцией execute
+    friends_id = []
+    for k in friends:
+        id = k['id']
+        friends_id.append(id)
 
-    friend_groups_overall = set()
-    len_friends = len(friends)
+    chunk_friends = []
+    new_set = set()
+    for i in range(len(friends_id)):
+        chunk_friends.append(friends_id[i])
+        if i%25 == 0:
+            friend_groups = execute(chunk_friends)
+            print('-')
+            chunk_friends = []
+            new_set.update(friend_groups)
+        if i == (len(friends_id) - 1):
+            friend_groups = execute(chunk_friends)
+            new_set.update(friend_groups)
 
-    # проходимся по id new_valid_friends и для каждого делаем запрос групп, объединяем это в один set
-    for i, friend in enumerate(friends):
-        print('{} из {} пользователей'.format(i, len_friends))
-        print('Обработка групп пользователя {} {}'.format(friend['first_name'], friend['last_name']))
-        friend_groups_json = get_groups(friend['id'], params)
-        friend_groups_list = [(gr['id'], gr['name']) for gr in friend_groups_json]
-        friend_groups_overall = friend_groups_overall.union(friend_groups_list)
-
-    result_set = set(my_groups).difference(friend_groups_overall)
+    # находим разность множеств между группами пользователя и группами друзей
+    result_set = set(my_groups_id).difference(new_set)
 
     # преобразуем итог в список с id
-    result_groups_ids = [group_id for group_id, name in result_set]
+    result_groups_ids = list(result_set)
 
     # для финального результата собираем список словарей с полями 'id', 'name', 'members_count'
     result_groups_json = []
